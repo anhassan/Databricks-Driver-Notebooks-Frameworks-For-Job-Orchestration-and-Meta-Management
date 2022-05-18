@@ -27,21 +27,21 @@ Base = declarative_base()
 class DriverLogs(Base):
   __tablename__ = 'driver_logs'
   driver_name = Column(String(256),primary_key=True)
-  driver_run_id = Column(String(256))
+  driver_run_id = Column(String(256),primary_key=True)
   driver_run_status = Column(String(256))
-  driver_run_time = Column(Integer)
-  driver_run_start_time = Column(DateTime)
-  driver_run_end_time = Column(DateTime)
+  driver_run_time_sec = Column(Integer)
+  driver_run_start_time_cst = Column(DateTime)
+  driver_run_end_time_cst = Column(DateTime)
 
 class DriverNotebookLogs(Base):
   __tablename__ = 'driver_notebook_logs'
-  surrogate_key = Column(Integer,primary_key=True,autoincrement=True)
   driver_name = Column(String(256))
-  notebook_name = Column(String(256))
+  driver_run_id = Column(String(256),primary_key=True)
+  notebook_name = Column(String(256),primary_key=True)
   notebook_status = Column(String(256))
-  notebook_run_time = Column(Integer)
-  notebook_start_time = Column(DateTime)
-  notebook_end_time = Column(DateTime)
+  notebook_run_time_sec = Column(Integer)
+  notebook_start_time_cst = Column(DateTime)
+  notebook_end_time_cst = Column(DateTime)
 
 # COMMAND ----------
 
@@ -62,20 +62,20 @@ def persist_metadata(metadata_obj,database_engine):
     session.commit()
     session.close()
     
-def insert_driver_logs(driver_name,driver_run_id,driver_run_status,driver_run_time
-                       ,driver_run_start_time,driver_run_end_time,database_type):
+def insert_driver_logs(driver_name,driver_run_id,driver_run_status,driver_run_time_sec
+                       ,driver_run_start_time_cst,driver_run_end_time_cst,database_type):
   
     database_engine = init_connection(database_type)
-    driver_logs = DriverLogs(driver_name=driver_name,driver_run_id=driver_run_id,driver_run_status=driver_run_status,driver_run_time=driver_run_time,
-                          driver_run_start_time=driver_run_start_time,driver_run_end_time=driver_run_end_time)
+    driver_logs = DriverLogs(driver_name=driver_name,driver_run_id=driver_run_id,driver_run_status=driver_run_status,driver_run_time_sec=driver_run_time_sec,
+                          driver_run_start_time_cst=driver_run_start_time_cst,driver_run_end_time_cst=driver_run_end_time_cst)
     persist_metadata(driver_logs,database_engine)
 
-def insert_notebook_logs(driver_name,notebook_name,notebook_status,notebook_run_time,
-                         notebook_start_time,notebook_end_time,database_type):
+def insert_notebook_logs(driver_name,driver_run_id,notebook_name,notebook_status,notebook_run_time_sec,
+                         notebook_start_time_cst,notebook_end_time_cst,database_type):
   
     database_engine = init_connection(database_type)
-    driver_notebook_logs = DriverNotebookLogs(driver_name = driver_name,notebook_name=notebook_name,notebook_status=notebook_status,
-                                         notebook_run_time=notebook_run_time,notebook_start_time=notebook_start_time,notebook_end_time=notebook_end_time)
+    driver_notebook_logs = DriverNotebookLogs(driver_name = driver_name,driver_run_id=driver_run_id,notebook_name=notebook_name,notebook_status=notebook_status,
+                                         notebook_run_time_sec=notebook_run_time_sec,notebook_start_time_cst=notebook_start_time_cst,notebook_end_time_cst=notebook_end_time_cst)
     persist_metadata(driver_notebook_logs,database_engine)
 
 Base.metadata.create_all(bind = init_connection("mysql"))
@@ -92,6 +92,7 @@ import requests
 def run_with_meta_management(index,arguments,notebook_path,base_path,driver_name,database_type,default_timezone,logging):
   start_time = time.time()
   start_datetime = datetime.now(default_timezone)
+  driver_run_id = get_driver_run_id(driver_name) if logging else None
   try:
       notebook_start_time = time.time()
       notebook_start_datetime = datetime.now(default_timezone)
@@ -104,7 +105,7 @@ def run_with_meta_management(index,arguments,notebook_path,base_path,driver_name
         notebook_end_datetime = datetime.now(default_timezone)
         notebook_run_duration = notebook_end_time - notebook_start_time
         print("Driver Name : {}, Notebook Name : {}, Time Taken : {} , Status : {}".format(driver_name,notebook_path,notebook_run_duration,True))
-        insert_notebook_logs(driver_name,notebook_path,"SUCCESS",round(notebook_run_duration),notebook_start_datetime,notebook_end_datetime,database_type)
+        insert_notebook_logs(driver_name,driver_run_id,notebook_path,"SUCCESS",round(notebook_run_duration),notebook_start_datetime,notebook_end_datetime,database_type)
         
       print("{} Successfull in Time : {}".format(notebook_full_path,notebook_end_time-start_time))
      
@@ -115,7 +116,7 @@ def run_with_meta_management(index,arguments,notebook_path,base_path,driver_name
         notebook_end_datetime = datetime.now(default_timezone)
         notebook_run_duration = notebook_end_time - start_time
         print("Driver Name : {}, Notebook Name : {}, Time Taken : {} , Status : {}".format(driver_name,notebook_path,notebook_run_duration,False))
-        insert_notebook_logs(driver_name,notebook_path,"FAILURE",round(notebook_run_duration),start_datetime,notebook_end_datetime,database_type)
+        insert_notebook_logs(driver_name,driver_run_id,notebook_path,"FAILURE",round(notebook_run_duration),start_datetime,notebook_end_datetime,database_type)
         
       print("{} Failed...".format(notebook_full_path))
       raise Exception("{} Failed...".format(notebook_full_path))
@@ -138,7 +139,7 @@ def run_parallel_notebooks(base_path,notebook_paths,num_parallel_jobs,driver_not
   driver_run_end_time = time.time()
   driver_run_end_datetime = datetime.now(default_timezone)
   driver_run_time = driver_run_end_time - driver_run_start_time
-  driver_status = [["FAILURE",index] for index,notebook_status in enumerate(notebooks_status) if "Exception" in str(notebook_status)]
+  driver_status = [["FAILURE",index] for index,notebook_status in enumerate(notebooks_status) if "Exception" in str(notebook_status) or "Error" in str(notebook_status)]
   driver_run_status = driver_status[0][0] if len(driver_status) > 0 else "SUCCESS"
   
   if logging:
@@ -147,8 +148,13 @@ def run_parallel_notebooks(base_path,notebook_paths,num_parallel_jobs,driver_not
     insert_driver_logs(driver_name,driver_run_id,driver_run_status,round(driver_run_time),driver_run_start_datetime,driver_run_end_datetime,database_type)
   
   if len(driver_status) > 0:
-    notebook_name = notebook_paths[driver_status[0][1]]
-    raise Exception("Notebook : {} Failed...".format(notebook_name))
+    failed_notebooks_list = ""
+    failed_notebook_names = [notebook_paths[notebook_status[1]] for notebook_status in driver_status]
+    
+    for notebook in failed_notebook_names:
+      failed_notebooks_list = failed_notebooks_list + "," + notebook
+      
+    raise Exception("Following Notebooks : [{}] Failed...".format(failed_notebooks_list[1:]))
   
   return "Parallel Running took {} seconds".format(driver_run_end_time-driver_run_start_time)
     
@@ -162,6 +168,7 @@ def run_series_notebooks(base_path,notebook_paths,driver_notebook_path,arguments
   execution_times = []
   driver_run_start_time = time.time()
   driver_run_start_datetime = datetime.now(default_timezone)
+  driver_run_id = get_driver_run_id(driver_name) if logging else None
   
   for index,notebook_path in enumerate(notebook_paths):
     print("Running Notebook : {} ".format(notebook_path))
@@ -178,7 +185,7 @@ def run_series_notebooks(base_path,notebook_paths,driver_notebook_path,arguments
             notebook_end_datetime = datetime.now(default_timezone)
             notebook_run_duration = notebook_end_time - notebook_start_time
             print("Driver Name : {}, Notebook Name : {}, Time Taken : {} , Status : {}".format(driver_name,notebook_path,notebook_run_duration,True))
-            insert_notebook_logs(driver_name,notebook_path,"SUCCESS",round(notebook_run_duration),notebook_start_datetime,notebook_end_datetime,database_type)
+            insert_notebook_logs(driver_name,driver_run_id,notebook_path,"SUCCESS",round(notebook_run_duration),notebook_start_datetime,notebook_end_datetime,database_type)
             
           print("{}/{} Successfull...".format(base_path,notebook_path))
     except:
@@ -187,13 +194,12 @@ def run_series_notebooks(base_path,notebook_paths,driver_notebook_path,arguments
             notebook_end_datetime = datetime.now(default_timezone)
             notebook_run_duration = notebook_end_time - start_time
             print("Driver Name : {}, Notebook Name : {}, Time Taken : {} , Status : {}".format(driver_name,notebook_path,notebook_run_duration,False))
-            insert_notebook_logs(driver_name,notebook_path,"FAILURE",round(notebook_run_duration),start_datetime,notebook_end_datetime,database_type)
+            insert_notebook_logs(driver_name,driver_run_id,notebook_path,"FAILURE",round(notebook_run_duration),start_datetime,notebook_end_datetime,database_type)
             
             driver_run_end_time = time.time()
             driver_run_end_datetime = datetime.now(default_timezone)
             driver_run_time = driver_run_end_time - driver_run_start_time
             driver_run_status = "FAILURE"
-            driver_run_id = get_driver_run_id(driver_name)
             print("Driver Name : {} , Driver Run Id : {} , Time Taken : {}, Status : {}".format(driver_name,driver_run_id,driver_run_time,driver_run_status))
             insert_driver_logs(driver_name,driver_run_id,driver_run_status,round(driver_run_time),driver_run_start_datetime,driver_run_end_datetime,database_type)
             
@@ -250,3 +256,6 @@ def get_driver_run_id(driver_name):
     return max(driver_run_id) if len(driver_run_id) > 0 else "No job exists"
 
 print("Driver Utilities Loaded Successfully....")
+
+# COMMAND ----------
+
